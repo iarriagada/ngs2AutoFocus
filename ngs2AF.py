@@ -8,6 +8,9 @@ import time
 import paramiko
 import matplotlib.pyplot as plt
 
+ngs2ip = '172.17.65.31'
+ngs2user = 'aouser'
+ngs2pass = 'ngs2@CerroP'
 host = '"tcp://localhost:45000"'
 utlPath = '/opt/ao/bin/aocmd'
 # filePath = '/home/aouser/focusSeq/'
@@ -54,6 +57,11 @@ def parse_args():
 
 if __name__ == '__main__':
     focus = 0.0
+    ngs2Server = paramiko.SSHClient()
+    ngs2Server.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    ngs2Server.connect(ngs2ip,
+                       username=ngs2user,
+                       password=ngs2pass)
     wFWHMAvgList = []
     while (focus < 6.5):
         startDate = datetime.now() # starting time of the capture
