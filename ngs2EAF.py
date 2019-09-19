@@ -75,13 +75,10 @@ def onPosChange(pvname=None, value=None, char_value=None, host=None, **kws):
         print("Focus position {0} reached".format(str(focusPos.value)))
         posFlag = True
 
-if __name__ == '__main__':
-    # Capture command line arguments
-    args = parse_args()
-    # Define lists and global variables
+def captureFWHM(spos, epos, step):
+    global posFlag
+    global focus
     wFWHMAvgList = []
-    focus = 0
-    posFlag = True
     # Start connection with epics records
     w1fwhm = epics.PV(w1Rec)
     w2fwhm = epics.PV(w2Rec)
@@ -92,14 +89,14 @@ if __name__ == '__main__':
     focusMod = epics.PV(focusModRec)
     # Handles the case in which the starting position is greater than end
     # position
-    if args.spos > args.epos:
-        posList = list(np.arange(float(args.epos),
-                                 float(args.spos)+float(args.step),
-                                 float(args.step)))
+    if spos > epos:
+        posList = list(np.arange(float(epos),
+                                 float(spos)+float(step),
+                                 float(step)))
     else:
-        posList = list(np.arange(float(args.spos),
-                                 float(args.epos)+float(args.step),
-                                 float(args.step)))
+        posList = list(np.arange(float(spos),
+                                 float(epos)+float(step),
+                                 float(step)))
     print('This is the range of positions to move:')
     print(posList)
     focusMod.put('MOVE')
@@ -148,6 +145,15 @@ if __name__ == '__main__':
     fwhmAvgData = np.array(wFWHMAvgList).T
     print(np.array(wFWHMAvgList).T)
     print(fwhmAvgData.min(axis=1))
+    return fwhmAvgData
+
+if __name__ == '__main__':
+    # Capture command line arguments
+    args = parse_args()
+    # Define lists and global variables
+    focus = 0
+    posFlag = True
+    fwhmAvgData = captureFWHM(args.spos, args.epos, args.step)
     fwhmData = []
     with open(fileName, 'rb') as f:
         while(True):
