@@ -7,6 +7,7 @@ import epics
 import argparse
 import pickle
 import numpy as np
+import matplotlib
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 
@@ -59,6 +60,13 @@ def parse_args():
                         help='Step size between each focus position\
                         e.g.: -stp 0.5')
 
+    parser.add_argument('-pkl',
+                        '--pickle',
+                        dest='pklFile',
+                        default='',
+                        help='Name of the pickle file to be plotted and used\
+                        e.g.: -pkl autofocus-20190919T185622.pkl')
+
     parser.add_argument('-naf',
                         '--noAF',
                         dest='noAF',
@@ -69,13 +77,16 @@ def parse_args():
     return args
 
 def onPosChange(pvname=None, value=None, char_value=None, host=None, **kws):
-    global posFlag
-    global focus
+    global posFlag # Global in position variable
+    global focus # Focus stage position demand
+    # Check if current pos is within tolerance from target position only if
+    # position hasn't been reached
     if (abs(focus-value) < 0.001) and not(posFlag):
-        print("Focus position {0} reached".format(str(focusPos.value)))
+        print("Focus position {0} reached".format(str(value)))
         posFlag = True
 
-def captureFWHM(spos, epos, step):
+def captureFWHM(focusPos, focusDmd, focusMod, focusDir,
+                spos, epos, step, fname):
     global posFlag
     global focus
     wFWHMAvgList = []
@@ -83,10 +94,6 @@ def captureFWHM(spos, epos, step):
     w1fwhm = epics.PV(w1Rec)
     w2fwhm = epics.PV(w2Rec)
     w3fwhm = epics.PV(w3Rec)
-    focusDmd = epics.PV(focusDmdRec)
-    focusPos = epics.PV(focusPosRec, callback=onPosChange)
-    focusDir = epics.PV(focusDirRec)
-    focusMod = epics.PV(focusModRec)
     # Handles the case in which the starting position is greater than end
     # position
     if spos > epos:
@@ -99,13 +106,10 @@ def captureFWHM(spos, epos, step):
                                  float(step)))
     print('This is the range of positions to move:')
     print(posList)
-    focusMod.put('MOVE')
-    startTime = datetime.now() # starting time of the capture
-    startDateStr = datetime.strftime(startTime, '%Y%m%dT%H%M%S')
-    fileName = 'autofocus-'+startDateStr+'.pkl' # define file name
-    with open(fileName, 'ab') as f:
+    with open(fname, 'ab') as f:
         # write channels names at the top of pickle file
         pickle.dump(axisNames, f)
+    focusMod.put('MOVE')
     for focus in posList:
         wFWHM = []
         # Sets focus demand, then executes focus command, then wait until
@@ -125,20 +129,11 @@ def captureFWHM(spos, epos, step):
                           focus])
             sample += 1
             time.sleep(0.2)
-        # waitTime = 0
-        # startTime = datetime.now()
-        # # Wait until file becomes available
-        # while not(os.path.exists(filePath + fileName)):
-            # time.sleep(0.1)
-            # currTime = datetime.now()
-            # waitTime = (currTime - startTime).total_seconds()
-            # if waitTime > maxWait:
-                # break
         # Transpose matrix, calculate the average of each column then append
         # results to final list
         wFWHMMat = np.array(wFWHM).T
         wFWHMAvg = list(np.average(wFWHMMat, axis=1))
-        with open(fileName, 'ab') as f:
+        with open(fname, 'ab') as f:
             # write channels names at the top of pickle file
             pickle.dump(wFWHMAvg, f)
         wFWHMAvgList.append(wFWHMAvg)
@@ -147,27 +142,95 @@ def captureFWHM(spos, epos, step):
     print(fwhmAvgData.min(axis=1))
     return fwhmAvgData
 
+def analyzeFile(fName):
+    print('Reading data from ' + fName)
+    fwhmData = []
+    with open(fName, 'rb') as f:
+        while(True):
+            try:
+                fwhmData.append(pickle.load(f))
+            except (EOFError):
+                break
+    # print("sample of FWHM array:")
+    # print(fwhmData[0])
+    # print(fwhmData[1])
+    # print("size of pickle: " + str(len(fwhmData)))
+    return fwhmData
+
 if __name__ == '__main__':
     # Capture command line arguments
     args = parse_args()
     # Define lists and global variables
     focus = 0
     posFlag = True
-    fwhmAvgData = captureFWHM(args.spos, args.epos, args.step)
-    fwhmData = []
-    with open(fileName, 'rb') as f:
-        while(True):
-            try:
-                fwhmData.append(pickle.load(f))
-            except (EOFError):
-                break
-    print("sample of FWHM array:")
-    print(fwhmData[0])
-    print(fwhmData[1])
-    print("size of pickle: " + str(len(fwhmData)))
-    plt.plot(fwhmAvgData[3], fwhmAvgData[0], label='W1')
-    plt.plot(fwhmAvgData[3], fwhmAvgData[1], label='W2')
-    plt.plot(fwhmAvgData[3], fwhmAvgData[2], label='W3')
+    startTime = datetime.now() # starting time of the capture
+    startDateStr = datetime.strftime(startTime, '%Y%m%dT%H%M%S')
+    fileName = 'autofocus-'+startDateStr+'.pkl' # define file name
+    fDmd = epics.PV(focusDmdRec)
+    fDir = epics.PV(focusDirRec)
+    fMod = epics.PV(focusModRec)
+    fPos = epics.PV(focusPosRec, callback=onPosChange)
+    if args.pklFile == '':
+        fwhmAverage = captureFWHM(fPos, fDmd, fMod, fDir, args.spos,
+                                  args.epos, args.step, fileName)
+    else:
+        fwhmFromFile = analyzeFile(args.pklFile)
+        fwhmAverageList = fwhmFromFile[1:]
+        fwhmAverage = np.array(fwhmAverageList).T
+    pOrder = 10
+    cW1 = np.polyfit(fwhmAverage[3], fwhmAverage[0], pOrder)
+    cW2 = np.polyfit(fwhmAverage[3], fwhmAverage[1], pOrder)
+    cW3 = np.polyfit(fwhmAverage[3], fwhmAverage[2], pOrder)
+    # print(cW1)
+    # print(cW1[0] + cW1[1]*(fwhmAverage[3][0]**1) + cW1[2]*(fwhmAverage[3][0]**2) + cW1[3]*(fwhmAverage[3][0]**3) + cW1[4]*(fwhmAverage[3][0]**4))
+    # pnW1 = np.poly1d(cW1)
+    # print (pnW1(fwhmAverage[3][0]))
+    # print(fwhmAverage[3][0])
+    # print(fwhmAverage[0][0])
+
+
+
+    pfW1 = [np.sum([cW1[pOrder-j] * x**j for j in list(range(pOrder+1))])
+                                                for x in fwhmAverage[3]]
+    pfW2 = [np.sum([cW2[pOrder-j] * x**j for j in list(range(pOrder+1))])
+                                                for x in fwhmAverage[3]]
+    pfW3 = [np.sum([cW3[pOrder-j] * x**j for j in list(range(pOrder+1))])
+                                                for x in fwhmAverage[3]]
+    minIndW1 = list(pfW1).index(np.amin(pfW1))
+    minFW1 = fwhmAverage[3][minIndW1]
+    labelW1 = 'OFP = ' + str(minFW1)
+    minIndW2 = list(pfW2).index(np.amin(pfW2))
+    minFW2 = fwhmAverage[3][minIndW2]
+    labelW2 = 'OFP = ' + str(minFW2)
+    minIndW3 = list(pfW3).index(np.amin(pfW3))
+    minFW3 = fwhmAverage[3][minIndW3]
+    labelW3 = 'OFP = ' + str(minFW3)
+
+    optFocus = np.average([minFW1, minFW2, minFW3])
+    print('Optimal Focus Position (OFP) is {0} [mm]'.format(optFocus))
+    print('Moving focus to position')
+    fMod.put('MOVE')
+    posFlag = False
+    focus = optFocus
+    fDmd.put(optFocus)
+    fDir.put('START')
+    while not(posFlag):
+        continue
+    plt.plot(fwhmAverage[3], fwhmAverage[0], label='W1',
+                 color='#0000FF', linestyle = '', marker='x')
+    plt.plot(fwhmAverage[3], pfW1, label='Polyfit W1',
+                 color='#00AAFF', linestyle = '--', marker='')
+    plt.axvline(minFW1, label=labelW1, color='#0000FF')
+    plt.plot(fwhmAverage[3], fwhmAverage[1], label='W2',
+                 color='#00FF00', linestyle = '', marker='x')
+    plt.plot(fwhmAverage[3], pfW2, label='Polyfit W2',
+                 color='#00FFAA', linestyle = '--', marker='')
+    plt.axvline(minFW2, label=labelW2, color='#00FF00')
+    plt.plot(fwhmAverage[3], fwhmAverage[2], label='W3',
+                 color='#FF0000', linestyle = '', marker='x')
+    plt.plot(fwhmAverage[3], pfW3, label='Polyfit W3',
+                 color='#FF00AA', linestyle = '--', marker='')
+    plt.axvline(minFW3, label=labelW3, color='#FF0000')
     plt.ylabel('FWHM [pix]')
     plt.xlabel('Focus Pos [mm]')
     plt.title('Focus Optimization')
